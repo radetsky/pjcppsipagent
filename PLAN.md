@@ -68,8 +68,7 @@ pjcppagent/
 │       ├── test_grpc_mode.py
 │       └── requirements.txt
 ├── testenv/
-│   ├── sipp/
-│   │   ├── ooc_register.xml       # 200 OK to REGISTER/un-REGISTER (out-of-call)
+│   ├── sipp/                # every scenario also answers REGISTER via a method branch (see M6)
 │   │   ├── uas_answer_audio.xml   # answer -> ~9 s audio -> silence -> awaits BYE
 │   │   ├── uas_busy.xml           # 486 -> recv ACK
 │   │   ├── uas_no_answer.xml      # 180 forever, 200 + 487 on CANCEL
@@ -357,25 +356,44 @@ peer is SIPp (>= 3.6) running natively; it covers both roles the agent needs:
 it answers the REGISTER (registrar stand-in) and terminates the test call
 (UAS with scripted behaviour and real RTP).
 
-Key SIPp facts (they shape the file layout):
-- A scenario instance is keyed by Call-ID. REGISTER and INVITE use different
-  Call-IDs, so REGISTER can never be handled inside the INVITE scenario;
-  out-of-call requests go to the scenario passed via `-oocsf`.
+Key SIPp facts (verified against v3.7.3 on this machine; they shape the
+scenario structure):
+- A scenario instance is keyed by Call-ID, and `-oocsf` (out-of-call
+  scenarios) is REJECTED in server mode ("SIPp cannot use out-of-call
+  scenarios when running in server mode"). Therefore every scenario handles
+  REGISTER itself via a method branch — see the template below.
 - `<exec rtp_stream="file"/>` streams raw G.711 payload bytes (NOT a WAV).
-- SIPp exits 0 only if the scenario ran to completion — the integration
-  tests assert on this exit code as an extra SIP-flow check.
+- `[media_ip]`/`[media_port]` in SDP are empty unless `-mi`/`-mp` are passed;
+  PJSIP then tears the call down immediately after the 200.
+- The un-REGISTER the agent sends on shutdown reuses the original REGISTER's
+  Call-ID, so it lands on the already-finished instance and is logged as
+  "Dead call ... (successful)" in the error log — benign, do not assert on it.
 
-`testenv/sipp/ooc_register.xml` — out-of-call handler used by every run:
-replies `200 OK` to REGISTER (and to the un-REGISTER the agent sends on
-shutdown), echoing `[last_Contact:]` and adding `Expires: 300`. Without the
-echoed Contact PJSIP does not consider the registration successful. No digest
-challenge in the PoC: PJSIP only authenticates when challenged, so the
-`agent/agentpass` credentials flow through unverified (optional stretch goal:
-an ooc variant that first sends a static 401 challenge and asserts an
+REGISTER-branch template (opening of EVERY scenario; verified working —
+PJSIP requires the echoed Contact to consider registration successful):
+
+```xml
+<recv request=".*" regexp_match="true">
+  <action>
+    <ereg regexp="REGISTER" search_in="hdr" header="CSeq:"
+          check_it="false" assign_to="isreg" />
+  </action>
+</recv>
+<nop test="isreg" next="do_register" />
+<!-- ... INVITE flow of the specific scenario, ending with next="done" ... -->
+<label id="do_register" />
+<send><!-- 200 OK echoing [last_Contact:], plus "Expires: 300" --></send>
+<label id="done" />
+<nop />
+```
+
+No digest challenge in the PoC: PJSIP only authenticates when challenged, so
+the `agent/agentpass` credentials flow through unverified (optional stretch
+goal: a variant that first sends a static 401 challenge and asserts an
 `Authorization` header on the retry).
 
-Call scenarios — each starts with `recv INVITE`; every `200 OK` carries SDP
-with `[media_ip]`/`[media_port]` and PCMU/8000:
+Call scenarios — the INVITE branch of each; every `200 OK` carries SDP with
+`[media_ip]`/`[media_port]` and PCMU/8000:
 
 | file                 | behaviour                                                        |
 |----------------------|------------------------------------------------------------------|
@@ -387,12 +405,17 @@ with `[media_ip]`/`[media_port]` and PCMU/8000:
 Launch command (used by `run_uas.sh` and the pytest fixture):
 
 ```
-sipp -sf testenv/sipp/<scenario>.xml -oocsf testenv/sipp/ooc_register.xml \
-     -i 127.0.0.1 -p <port> -m 1 -bg -nostdin -trace_err
+sipp -sf testenv/sipp/<scenario>.xml -i 127.0.0.1 -p <port> \
+     -mi 127.0.0.1 -mp <rtp_port> -bg -nostdin -trace_err
 ```
 
-`scripts/run_uas.sh <scenario> <port>`: wraps the command above without
-`-m 1` (serves calls until killed) for manual CLI-mode testing; prints the
+Do NOT use `-m`: with the REGISTER branch every registration is its own
+SIPp "call", which skews the count. Stop SIPp with SIGUSR1 (graceful: exits
+0 if no scenario deviations occurred) — that is what the pytest fixture
+asserts on.
+
+`scripts/run_uas.sh <scenario> <port>`: wraps the command above (serves
+calls until killed) for manual CLI-mode testing; prints the
 `--sip-host/--sip-port` values to use.
 
 `scripts/gen_fixtures.sh`:
@@ -444,10 +467,10 @@ Setup (`tests/integration/`):
   - fixture `sipp_uas` (factory, function-scoped): given a scenario name,
     allocates a unique UDP port per test (5081, 5082, ... via a counter),
     launches the M6 SIPp command as a subprocess and yields `(host, port)`.
-    Teardown: wait for the process (timeout 30 s, then kill) and assert
-    exit code 0 — a non-zero code means the SIP flow deviated from the
-    scenario, which is itself a test failure. Keep `-trace_err` logs in the
-    test tmpdir for debugging.
+    Teardown: send SIGUSR1 (graceful stop), wait up to 5 s, assert exit
+    code 0 — a non-zero code means the SIP flow deviated from the scenario,
+    which is itself a test failure. Keep `-trace_err` logs in the test
+    tmpdir for debugging ("Dead call" un-REGISTER entries are benign).
   - session fixture `proto_stubs`: run `python -m grpc_tools.protoc` on
     `protos/call_agent.proto` into a temp dir, import stubs from there.
   - fixture `agent_server` (factory: accepts extra CLI flags — needed by
@@ -525,13 +548,14 @@ Definition of done checklist (verify each item, do not self-certify):
 5. **WAV format**: PJSIP's file player wants PCM WAV; resample fixtures to
    8 kHz mono s16le (`ffmpeg -ar 8000 -ac 1 -sample_fmt s16`). A 44.1 kHz
    stereo file will play as garbage or fail to open.
-6. **SIPp scenario scoping**: scenario instances are keyed by Call-ID.
-   REGISTER (and the un-REGISTER the agent sends on shutdown) must be handled
-   by the `-oocsf` out-of-call scenario, never by the main INVITE scenario.
-   The shutdown un-REGISTER arrives after the main scenario has finished —
-   the ooc handler absorbs it; do not assert on it. Also: `rtp_stream` wants
-   raw G.711 payload bytes, not a WAV file; if the local SIPp build lacks
-   rtpstream, fall back to `play_pcap_audio` + `scripts/wav2rtpcap.py` (M6).
+6. **SIPp quirks** (all verified): `-oocsf` does not work in server mode —
+   REGISTER must be handled by the method branch inside each scenario (M6
+   template). SDP `[media_ip]`/`[media_port]` are empty without `-mi`/`-mp`
+   on the command line, and PJSIP then drops the call right after the 200.
+   `rtp_stream` wants raw G.711 payload bytes, not a WAV file; if the local
+   SIPp build lacks rtpstream, fall back to `play_pcap_audio` +
+   `scripts/wav2rtpcap.py` (M6). The shutdown un-REGISTER shows up as a
+   benign "Dead call (successful)" log entry.
 7. **grpcurl with a non-reflected server**: pass
    `-import-path protos -proto call_agent.proto`, or add gRPC reflection to
    the server (optional nice-to-have, not required).
