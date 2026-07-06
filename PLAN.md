@@ -157,6 +157,8 @@ sip_pass        : string   (--sip-pass,  env AGENT_SIP_PASS,  required in cli mo
 destination     : string   (--dest, required in cli mode; E.164 or extension)
 caller_id       : string   (--caller-id, optional)
 answer_delay_s  : uint32   (--answer-delay, default 1)
+answer_timeout_s: uint32   (--answer-timeout, default 30; max ringing time
+                            before the agent cancels the call, see M3)
 silence_s       : uint32   (--silence-timeout, default 10)
 record          : bool     (--record, default true)
 record_dir      : string   (--record-dir, default "./recordings")
@@ -226,8 +228,8 @@ This is the largest milestone. Implement `sip_agent` + `call_executor`.
   gRPC from them. They only push `InternalEvent` into a thread-safe queue
   (`std::mutex` + `std::condition_variable` + `std::deque`).
 - `CallExecutor::run()` is the single consumer: a state machine that pops
-  events, drives timers (answer delay, registration timeout, max call
-  duration 600 s hard cap), calls PJSIP actions, and emits `CallEvent`s to a
+  events, drives timers (answer delay, registration timeout, answer timeout,
+  max call duration 600 s hard cap), calls PJSIP actions, and emits `CallEvent`s to a
   sink callback (`std::function<void(const AgentEvent&)>`).
 - Any thread that touches PJSIP APIs and was not created by PJSIP must first
   call `Endpoint::instance().libRegisterThread("name")`. This includes the
@@ -247,6 +249,14 @@ Disconnect mapping table (implement in `events.cpp`, unit-test it):
 | anything else (4xx/5xx/6xx, network)  | FAILED            | keep sip_code + reason   |
 
 `billing_seconds` = whole seconds between CONFIRMED and DISCONNECTED, rounded up.
+
+Answer timeout (the agent-initiated NO_ANSWER path): if the call has not
+reached CONFIRMED within `answer_timeout_s` after `makeCall`, the executor
+calls `hangup()` (PJSIP sends CANCEL), the remote replies 487, and the
+mapping table yields NO_ANSWER. Do not rely on the far end sending 408/480.
+Distinction: agent's own timeout -> NO_ANSWER; a gRPC client cancel (M5)
+-> CANCELLED. Note the wait loop in `CallExecutor::run()` must use a
+deadline, not an unbounded wait.
 
 CLI mode output: one JSON object per line to STDOUT via `events.cpp`
 (`nlohmann::json`), e.g.
@@ -311,7 +321,9 @@ callback API and sufficient for 1 concurrent call):
    - Validate request (`call_id` non-empty, sip fields present, destination
      non-empty, exactly one audio_source) -> `INVALID_ARGUMENT` with details.
    - Map proto -> internal `Config`-like struct; `0` timeout fields mean
-     defaults (1 s / 10 s) as documented in the proto.
+     defaults (1 s / 10 s) as documented in the proto. The vendored proto has
+     no per-request answer timeout field; the process-wide `--answer-timeout`
+     flag applies to every call the server executes.
    - Run `CallExecutor` with a sink that converts internal events to proto
      `CallEvent` (reuse `events.cpp` mapping; add `occurred_at` timestamps)
      and `writer->Write()`s them. `Write` happens on the RPC thread: the sink
@@ -438,9 +450,12 @@ Setup (`tests/integration/`):
     test tmpdir for debugging.
   - session fixture `proto_stubs`: run `python -m grpc_tools.protoc` on
     `protos/call_agent.proto` into a temp dir, import stubs from there.
-  - fixture `agent_server`: launch `./build/pjcppagent --mode server
-    --grpc-listen 127.0.0.1:50151 --record-dir <tmpdir>` as a subprocess,
-    wait until Health answers READY (retry 20x every 0.5 s), teardown: kill.
+  - fixture `agent_server` (factory: accepts extra CLI flags — needed by
+    test_no_answer `--answer-timeout 8` and test_idle_shutdown
+    `--idle-shutdown 10`): launch `./build/pjcppagent --mode server
+    --grpc-listen 127.0.0.1:<unique port> --record-dir <tmpdir>` as a
+    subprocess, wait until Health answers READY (retry 20x every 0.5 s),
+    teardown: kill.
   - helper `make_request(sipp_addr, wav|text, **overrides)` filling
     SipCredentials with `agent/agentpass@127.0.0.1:<port>` UDP, where
     `<port>` is the test's own SIPp instance. The dialled destination is
@@ -452,7 +467,7 @@ Test cases (each asserts the full ordered event sequence and the result):
 |-----------------------------|------------------|------------------------------------------------------|
 | test_answered_full_flow     | uas_answer_audio | states ...ANSWERED..PLAYED, SILENCE_DETECTED, RECORDING_READY, result ANSWERED, billing_seconds >= 10, recording file exists & is 8k mono s16le |
 | test_busy                   | uas_busy         | result BUSY, sip_code 486, no RECORDING_READY        |
-| test_no_answer              | uas_no_answer    | with a client-side deadline of 25 s: result NO_ANSWER |
+| test_no_answer              | uas_no_answer    | agent started with `--answer-timeout 8`; client-side deadline 25 s as a safety net -> agent cancels, result NO_ANSWER, sip_code 487 |
 | test_cancel                 | uas_talk_forever | cancel the RPC 3 s after ANSWERED -> agent hangs up; a follow-up Health shows READY within 5 s |
 | test_concurrent_rejected    | uas_answer_audio | second ExecuteCall while first runs -> ALREADY_EXISTS (rejected by the agent before any SIP traffic; one SIPp instance suffices) |
 | test_stream_audio_stub      | (none)           | StreamAudio -> UNIMPLEMENTED                          |
@@ -488,8 +503,10 @@ Definition of done checklist (verify each item, do not self-certify):
       code (PJSIP one-time allocations are acceptable; document suppressions).
 - [ ] `Health` idle_seconds resets on every RPC; watchdog never kills an
       in-progress call.
-- [ ] Proto file byte-identical to
-      `../../project/automated_calls/protos/call_agent.proto`.
+- [ ] Proto file identical to
+      `../../project/automated_calls/protos/call_agent.proto` except for the
+      leading vendor-note comment line added in M1. Verify:
+      `diff <(tail -n +2 protos/call_agent.proto) ../../project/automated_calls/protos/call_agent.proto`
 
 ---
 
@@ -521,6 +538,11 @@ Definition of done checklist (verify each item, do not self-certify):
 8. **proto3 zero values**: `answer_delay_seconds == 0` means "use default 1",
    it does NOT mean "no delay". This is already documented in the proto —
    implement it exactly that way.
+9. **Unreachable host / dead network**: `makeCall` to an unreachable host
+   ends with DISCONNECTED carrying 503 (or PJSIP throws from `makeCall`
+   itself — wrap it in try/catch). Both paths must produce
+   `CallResult{FAILED, sip_code, reason}` and a clean shutdown, never a hang;
+   the registration timeout (15 s) covers the dead-registrar case.
 
 ## 4. Suggested commit sequence
 
