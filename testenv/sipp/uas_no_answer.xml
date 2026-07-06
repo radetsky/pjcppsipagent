@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<!-- UAS handling both REGISTER (branch) and INVITE-that-never-answers. -->
+<scenario name="uas-no-answer">
+  <recv request=".*" regexp_match="true">
+    <action>
+      <ereg regexp="REGISTER" search_in="hdr" header="CSeq:" check_it="false" assign_to="isreg" />
+      <ereg regexp="[0-9]+" search_in="hdr" header="CSeq:" check_it="false" assign_to="cseqnum" />
+    </action>
+  </recv>
+
+  <nop test="isreg" next="do_register" />
+
+  <!-- ============ INVITE branch: ring forever, expect CANCEL ============ -->
+  <send>
+    <![CDATA[
+
+      SIP/2.0 180 Ringing
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:[local_ip]:[local_port];transport=[transport]>
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <recv request="CANCEL" />
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 487 Request Terminated
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      CSeq: [$cseqnum] INVITE
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <recv request="ACK" next="done" />
+
+  <!-- ============ REGISTER branch: plain 200 OK ============ -->
+  <label id="do_register" />
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTagReg[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      [last_Contact:]
+      Expires: 300
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <label id="done" />
+  <nop />
+</scenario>
