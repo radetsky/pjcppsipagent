@@ -24,6 +24,7 @@ struct Config {
     std::string destination;
     std::string caller_id;
     uint32_t answer_delay_s = 1;
+    uint32_t answer_timeout_s = 30; // max ringing time before we cancel -> NO_ANSWER
     uint32_t silence_s = 10;
     bool record = true;
     std::string record_dir = "./recordings";

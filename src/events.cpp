@@ -77,30 +77,26 @@ static std::string isoNow() {
 
 std::string AgentEvent::toJson() const {
     nlohmann::json j;
-    if (status == CallStatus::REGISTERING ||
-        status == CallStatus::REGISTERED) {
-        j["event"] = "state";
-        j["state"] = callStatusToString(status);
-        j["call_id"] = call_id;
-        j["ts"] = isoNow();
-    } else if (status == CallStatus::RECORDING_READY) {
-        j["event"] = "recording_ready";
-        j["uri"] = recording_path;
-        j["duration"] = billing_seconds;
-        j["call_id"] = call_id;
-        j["ts"] = isoNow();
-    } else if (status == CallStatus::ANSWERED ||
-               status == CallStatus::BUSY ||
-               status == CallStatus::NO_ANSWER ||
-               status == CallStatus::CANCELLED ||
-               status == CallStatus::FAILED ||
-               status == CallStatus::DISCONNECTED) {
+    // ANSWERED is a result only when flagged; the other final statuses are
+    // never emitted as intermediate states.
+    bool result_event = is_result ||
+                        status == CallStatus::BUSY ||
+                        status == CallStatus::NO_ANSWER ||
+                        status == CallStatus::CANCELLED ||
+                        status == CallStatus::FAILED;
+    if (result_event) {
         j["event"] = "result";
         j["status"] = callStatusToString(status);
         j["sip_code"] = sip_code;
         if (!reason.empty()) j["reason"] = reason;
         j["billing_seconds"] = billing_seconds;
         if (!recording_path.empty()) j["recording"] = recording_path;
+        j["call_id"] = call_id;
+        j["ts"] = isoNow();
+    } else if (status == CallStatus::RECORDING_READY) {
+        j["event"] = "recording_ready";
+        j["uri"] = recording_path;
+        j["duration"] = billing_seconds;
         j["call_id"] = call_id;
         j["ts"] = isoNow();
     } else {

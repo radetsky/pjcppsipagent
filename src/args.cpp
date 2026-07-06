@@ -35,6 +35,7 @@ std::string Config::toString() const {
     j["destination"]      = destination;
     j["caller_id"]        = caller_id;
     j["answer_delay_s"]   = answer_delay_s;
+    j["answer_timeout_s"] = answer_timeout_s;
     j["silence_s"]        = silence_s;
     j["record"]           = record;
     j["record_dir"]       = record_dir;
@@ -83,6 +84,7 @@ Config ArgParser::parse(int argc, char* argv[], const std::string& stdin_line) {
 
     // -- call behaviour -----------------------------------------------------
     app.add_option("--answer-delay",     config.answer_delay_s,  "Seconds after answer before playback (default 1)");
+    app.add_option("--answer-timeout",   config.answer_timeout_s, "Max ringing seconds before cancel -> NO_ANSWER (default 30)");
     app.add_option("--silence-timeout",  config.silence_s,       "Seconds of silence after playback -> hangup (default 10)");
     app.add_flag("--record",             config.record,          "Enable recording (default true)");
     app.add_option("--record-dir",       config.record_dir,      "Recording output directory");

@@ -48,6 +48,7 @@ TEST(ArgsTest, Defaults) {
     EXPECT_EQ(c.sip_port, 5060);
     EXPECT_EQ(c.sip_transport, Transport::UDP);
     EXPECT_EQ(c.answer_delay_s, 1u);
+    EXPECT_EQ(c.answer_timeout_s, 30u);
     EXPECT_EQ(c.silence_s, 10u);
     EXPECT_EQ(c.record, true);
     EXPECT_EQ(c.record_dir, "./recordings");
@@ -57,6 +58,17 @@ TEST(ArgsTest, Defaults) {
     EXPECT_EQ(c.silence_threshold, 10);
     EXPECT_TRUE(c.caller_id.empty());
     EXPECT_TRUE(c.audio_source.type.empty());
+}
+
+TEST(ArgsTest, AnswerTimeoutFlag) {
+    ScopedEnv host("AGENT_SIP_HOST", "h");
+    ScopedEnv user("AGENT_SIP_USER", "u");
+    ScopedEnv pass("AGENT_SIP_PASS", "p");
+    ScopedEnv dest("AGENT_DEST", "d");
+    ArgParser p;
+    auto argv = make_argv({"prog", "--answer-timeout", "8"});
+    Config c = p.parse(static_cast<int>(argv.size()), argv.data(), "");
+    EXPECT_EQ(c.answer_timeout_s, 8u);
 }
 
 // ---------------------------------------------------------------------------

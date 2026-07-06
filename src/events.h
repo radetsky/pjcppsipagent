@@ -60,6 +60,9 @@ struct AgentEvent {
   uint32_t billing_seconds = 0;   // for result (or duration for RECORDING_READY)
   int sip_code = 0;
   std::string reason;
+  // ANSWERED is both a state ("callee picked up") and a final result; this
+  // flag disambiguates. BUSY/NO_ANSWER/CANCELLED/FAILED are always results.
+  bool is_result = false;
 
   std::string toJson() const;
 };
@@ -93,11 +96,13 @@ struct InternalEvent {
 // PJSIP call state constants (mirror pjsip_inv_state, no PJSIP include needed)
 // ---------------------------------------------------------------------------
 
+// Values must mirror pjsip_inv_state exactly; sip_agent.cpp static_asserts this.
 constexpr int INV_STATE_NULL         = 0;
 constexpr int INV_STATE_CALLING      = 1;
-constexpr int INV_STATE_EARLY        = 2;
-constexpr int INV_STATE_CONNECTING   = 3;
-constexpr int INV_STATE_CONFIRMED    = 4;
-constexpr int INV_STATE_DISCONNECTED = 5;
+constexpr int INV_STATE_INCOMING     = 2;
+constexpr int INV_STATE_EARLY        = 3;
+constexpr int INV_STATE_CONNECTING   = 4;
+constexpr int INV_STATE_CONFIRMED    = 5;
+constexpr int INV_STATE_DISCONNECTED = 6;
 
 #endif // EVENTS_H

@@ -93,23 +93,48 @@ AgentEvent CallExecutor::run() {
     // --- Step 4: Wait for call states ---
     bool answered = false;
     bool media_active = false;
+    bool answer_timeout_hit = false;
+    const uint64_t answer_deadline_ms = nowMs() + config_.answer_timeout_s * 1000ULL;
 
     while (!cancelled_) {
+        // Agent-initiated NO_ANSWER path: no CONFIRMED within answer_timeout_s
+        // -> hangup() sends CANCEL, remote replies 487 -> NO_ANSWER via mapping.
+        if (!answered && !answer_timeout_hit && nowMs() >= answer_deadline_ms) {
+            answer_timeout_hit = true;
+            agent_.hangup();
+        }
+        // Safety net: remote never acknowledged our CANCEL with a final response
+        if (answer_timeout_hit && nowMs() >= answer_deadline_ms + 10000) {
+            result_.status = CallStatus::NO_ANSWER;
+            result_.reason = "answer timeout";
+            emitEvent({CallStatus::NO_ANSWER, agent_.callId(), "", 0, 0, result_.reason, true});
+            return result_;
+        }
+
         InternalEvent ev;
         if (!agent_.waitEvent(ev, 500)) continue;
 
         if (ev.type == InternalType::CALL_STATE) {
             if (ev.call_state == INV_STATE_CALLING) {
-                emitEvent({CallStatus::DIALING, agent_.callId(), "", 0, 0, ""});
+                // DIALING already emitted right before placeCall()
             } else if (ev.call_state == INV_STATE_EARLY) {
                 emitEvent({CallStatus::RINGING, agent_.callId(), "", 0, 0, ""});
             } else if (ev.call_state == INV_STATE_CONFIRMED) {
                 answered = true;
+                // Provisional final status; handleDisconnect refines it later.
+                result_.status = CallStatus::ANSWERED;
                 call_connected_ms_ = nowMs();
                 agent_.setCallStartTime(call_connected_ms_);
                 emitEvent({CallStatus::ANSWERED, agent_.callId(), "", 0, 0, ""});
             } else if (ev.call_state == INV_STATE_DISCONNECTED) {
-                handleDisconnect(ev.sip_code, ev.reason);
+                if (answer_timeout_hit) {
+                    // PJSIP records a local hangup of an early call as
+                    // "603 Decline"; the wire-level outcome of our CANCEL is
+                    // 487, which maps to NO_ANSWER.
+                    handleDisconnect(487, "answer timeout");
+                } else {
+                    handleDisconnect(ev.sip_code, ev.reason);
+                }
                 return result_;
             }
         } else if (ev.type == InternalType::MEDIA_STATE) {
@@ -281,7 +306,12 @@ void CallExecutor::handleDisconnect(int sip_code, const std::string& reason) {
         bill_sec = static_cast<uint32_t>((elapsed + 999) / 1000);
     }
 
-    CallStatus status = sipCodeToCallStatus(sip_code);
+    // Mapping table row 1: answered then hung up (any side) -> ANSWERED.
+    // Local hangup of a confirmed call is recorded by PJSIP as "603 Decline",
+    // so the sip-code mapping only applies to never-answered calls.
+    CallStatus status = (call_connected_ms_ > 0)
+        ? CallStatus::ANSWERED
+        : sipCodeToCallStatus(sip_code);
 
     result_.status = status;
     result_.sip_code = sip_code;
@@ -308,7 +338,8 @@ void CallExecutor::handleDisconnect(int sip_code, const std::string& reason) {
         result_.recording_path,
         bill_sec,
         sip_code,
-        reason
+        reason,
+        true
     });
 }
 

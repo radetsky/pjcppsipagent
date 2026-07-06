@@ -1,6 +1,15 @@
 #include "sip_agent.h"
 #include <iostream>
 
+// events.h mirrors pjsip_inv_state without including PJSIP; keep them in sync.
+static_assert(INV_STATE_NULL         == PJSIP_INV_STATE_NULL,         "pjsip_inv_state mismatch");
+static_assert(INV_STATE_CALLING      == PJSIP_INV_STATE_CALLING,      "pjsip_inv_state mismatch");
+static_assert(INV_STATE_INCOMING     == PJSIP_INV_STATE_INCOMING,     "pjsip_inv_state mismatch");
+static_assert(INV_STATE_EARLY        == PJSIP_INV_STATE_EARLY,        "pjsip_inv_state mismatch");
+static_assert(INV_STATE_CONNECTING   == PJSIP_INV_STATE_CONNECTING,   "pjsip_inv_state mismatch");
+static_assert(INV_STATE_CONFIRMED    == PJSIP_INV_STATE_CONFIRMED,    "pjsip_inv_state mismatch");
+static_assert(INV_STATE_DISCONNECTED == PJSIP_INV_STATE_DISCONNECTED, "pjsip_inv_state mismatch");
+
 // =========================================================================
 // SipAgent
 // =========================================================================
@@ -44,6 +53,10 @@ bool SipAgent::init() {
     pj::EpConfig ep_cfg;
     ep_cfg.logConfig.level = config_.log_level;
     ep_cfg.logConfig.consoleLevel = config_.log_level;
+    // Telephony narrowband: recordings must be 8 kHz mono s16le (PLAN.md M3);
+    // the default conference bridge rate is 16 kHz.
+    ep_cfg.medConfig.clockRate = 8000;
+    ep_cfg.medConfig.sndClockRate = 8000;
 
     ep_->libInit(ep_cfg);
 
