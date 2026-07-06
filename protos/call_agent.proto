@@ -1,0 +1,169 @@
+// Vendored from automated-calls main repo. Do not edit here; sync manually.
+// Draft contract between the Django backend (client) and the SIP call agent (server).
+// Design rationale: docs/SIP-AGENT.md ("Архітектура gRPC + Protobuf").
+//
+// Evolution rules: only add fields with new numbers; never rename, renumber or
+// reuse existing ones. The C++ (PJSIP) and future Rust agents must both
+// implement this service unchanged.
+
+syntax = "proto3";
+
+package automatedcalls.callagent.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service CallAgent {
+  // Level 1 — call control (PoC scope).
+  rpc Health(HealthRequest) returns (HealthResponse);
+
+  // Executes a single outbound call and streams its lifecycle events.
+  // The stream ends with a CallEvent carrying `result`.
+  // Cancelling the RPC hangs up the call.
+  rpc ExecuteCall(CallRequest) returns (stream CallEvent);
+
+  // Level 2 — realtime audio for LLM/TTS/STT integrations.
+  // PoC agents return UNIMPLEMENTED. When implemented: the agent sends the
+  // callee's inbound audio, the client sends audio to be played to the callee.
+  rpc StreamAudio(stream AudioFrame) returns (stream AudioFrame);
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+message HealthRequest {}
+
+message HealthResponse {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    READY = 1;         // idle, can accept ExecuteCall
+    BUSY = 2;          // at max concurrent calls
+    SHUTTING_DOWN = 3; // idle timeout reached, refusing new calls
+  }
+  State state = 1;
+  uint32 active_calls = 2;
+  // Seconds since the last RPC activity; the agent self-terminates at 300.
+  uint32 idle_seconds = 3;
+  string agent_version = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Call control
+// ---------------------------------------------------------------------------
+
+message SipCredentials {
+  string username = 1;
+  string password = 2;
+  string server_host = 3;
+  // 0 means default 5060.
+  uint32 server_port = 4;
+  Transport transport = 5;
+
+  enum Transport {
+    TRANSPORT_UNSPECIFIED = 0; // treated as UDP
+    UDP = 1;
+    TCP = 2;
+    TLS = 3;
+  }
+}
+
+message CallRequest {
+  // UUID of the Call row in Django; echoed back in every CallEvent.
+  string call_id = 1;
+  SipCredentials sip = 2;
+  // E.164 destination number.
+  string destination = 3;
+  // Optional CallerID override; empty means provider default.
+  string caller_id = 4;
+  // BCP 47 language tag of the call (e.g. "uk", "es", "en-US").
+  string language = 5;
+
+  oneof audio_source {
+    // URL of a WAV file (8 kHz mono PCM16) prepared by the backend.
+    string wav_url = 6;
+    // Text to synthesize with the agent's built-in TTS (PoC: simple English).
+    string tts_text = 7;
+  }
+
+  // Seconds to wait after answer before playback starts. 0 means default 1.
+  uint32 answer_delay_seconds = 8;
+  // Inbound silence duration that triggers hangup, measured after playback
+  // has finished. 0 means default 10.
+  uint32 silence_timeout_seconds = 9;
+  // Record the inbound RTP stream to a WAV file.
+  bool record = 10;
+}
+
+message CallEvent {
+  string call_id = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+
+  oneof event {
+    StateChange state_change = 3;
+    SilenceDetected silence_detected = 4;
+    RecordingReady recording_ready = 5;
+    // Terminal event: the stream is closed right after it.
+    CallResult result = 6;
+  }
+}
+
+message StateChange {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    REGISTERING = 1; // registering with the user's SIP server
+    REGISTERED = 2;
+    DIALING = 3;
+    RINGING = 4;
+    ANSWERED = 5;
+    PLAYING = 6;     // playback of WAV/TTS in progress
+    PLAYED = 7;      // playback finished, listening for silence
+    HANGING_UP = 8;
+  }
+  State state = 1;
+}
+
+message SilenceDetected {
+  uint32 silence_seconds = 1;
+}
+
+message RecordingReady {
+  // Path on the agent host or an uploaded object URL — the backend decides
+  // how to fetch it (open question in docs/SIP-AGENT.md).
+  string recording_uri = 1;
+  uint32 duration_seconds = 2;
+}
+
+message CallResult {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    ANSWERED = 1;
+    BUSY = 2;
+    NO_ANSWER = 3;
+    FAILED = 4;    // network/registration/protocol error, see error_message
+    CANCELLED = 5; // RPC cancelled by the client
+  }
+  Status status = 1;
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp ended_at = 3;
+  // Answered seconds used for billing; 0 unless status == ANSWERED.
+  uint32 billing_seconds = 4;
+  // TTS/STT tokens spent by the agent, if any (0 in PoC).
+  uint32 billing_tokens = 5;
+  string recording_uri = 6;
+  // SIP status code when available (e.g. 486 for BUSY).
+  uint32 sip_code = 7;
+  string error_message = 8;
+}
+
+// ---------------------------------------------------------------------------
+// Realtime audio (level 2)
+// ---------------------------------------------------------------------------
+
+// Fixed format: PCM16 little-endian, 8 kHz, mono, 20 ms per frame
+// (160 samples = 320 bytes). Matches the ffmpeg conversion used by the backend.
+message AudioFrame {
+  string call_id = 1;
+  // Monotonic frame counter per direction, starts at 0.
+  uint64 sequence = 2;
+  bytes pcm16 = 3;
+}
