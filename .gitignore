@@ -1,0 +1,12 @@
+build/
+.cache/
+testenv/audio/*.wav
+tests/integration/.python-venv/
+__pycache__/
+*.o
+*.gcda
+*.gcno
+*.gcov
+*.so.*
+CMakeCache.txt
+cmake_install.cmake
