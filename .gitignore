@@ -1,6 +1,6 @@
 build/
 .cache/
-testenv/audio/*.wav
+testenv/audio/
 tests/integration/.python-venv/
 __pycache__/
 *.o

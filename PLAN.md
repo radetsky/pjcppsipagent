@@ -69,16 +69,14 @@ pjcppagent/
 │       └── requirements.txt
 ├── testenv/
 │   ├── sipp/                # every scenario also answers REGISTER via a method branch (see M6)
-│   │   ├── uas_answer_audio.xml   # answer -> ~9 s audio -> silence -> awaits BYE
+│   │   ├── uas_answer.xml         # answer -> await BYE; media via -rtp_echo
 │   │   ├── uas_busy.xml           # 486 -> recv ACK
-│   │   ├── uas_no_answer.xml      # 180 forever, 200 + 487 on CANCEL
-│   │   └── uas_talk_forever.xml   # answer -> looped audio -> awaits BYE
+│   │   └── uas_no_answer.xml      # 180 forever, 200 + 487 on CANCEL
 │   └── audio/
 │       └── (generated fixtures, gitignored)
 └── scripts/
-    ├── gen_fixtures.sh      # creates test WAV/G.711 files with ffmpeg
+    ├── gen_fixtures.sh      # creates test WAV files with ffmpeg
     ├── run_uas.sh           # starts a SIPp UAS scenario for manual testing
-    ├── wav2rtpcap.py        # fallback: WAV -> RTP pcap (see M6)
     └── run_integration.sh   # build -> fixtures -> pytest (SIPp spawned per test)
 ```
 
@@ -265,7 +263,7 @@ and finally
 Exit code: 0 for ANSWERED, 3 BUSY, 4 NO_ANSWER, 5 FAILED, 6 CANCELLED.
 
 Acceptance criteria (manual, against the M6 SIPp UAS —
-`./scripts/run_uas.sh answer_audio 5080` — or any lab SIP box):
+`./scripts/run_uas.sh answer 5080` — or any lab SIP box):
 - `echo "wav:/tmp/hello.wav" | ./build/pjcppagent --sip-host 127.0.0.1 --sip-port 5080 --dest 100`
   registers, calls, plays, records, and prints the result JSON.
 - The recording file exists, is valid WAV (`ffprobe` shows pcm_s16le 8000 Hz mono).
@@ -304,8 +302,8 @@ Acceptance criteria:
 - `test_silence.cpp` covers: not armed -> never triggers; loud audio resets
   the window; exact boundary (9.9 s loud gap -> no trigger, 10.0 s -> trigger);
   triggers only once; re-arm works.
-- Manual: call the M6 `answer_audio` scenario (streams ~9 s of audio, then
-  silence) -> agent hangs up ~10 s after playback ends, events in order:
+- Manual: call the M6 `answer` scenario (echoes the agent's audio, silent
+  after playback) -> agent hangs up ~10 s after playback ends, events in order:
   `... PLAYED -> SILENCE_DETECTED -> HANGING_UP -> RECORDING_READY -> result`.
 
 ### M5 — gRPC server mode
@@ -362,7 +360,14 @@ scenario structure):
   scenarios) is REJECTED in server mode ("SIPp cannot use out-of-call
   scenarios when running in server mode"). Therefore every scenario handles
   REGISTER itself via a method branch — see the template below.
-- `<exec rtp_stream="file"/>` streams raw G.711 payload bytes (NOT a WAV).
+- The Homebrew build has NO working rtpstream (`sipp -v` says
+  `TLS-PCAP-SHA256`, no `RTPSTREAM`): `<exec rtp_stream=...>` silently sends
+  0 RTP packets. `<exec play_pcap_audio=...>` needs a raw IPv4 socket, i.e.
+  root — unusable in tests. **The media mechanism is `-rtp_echo`**: SIPp
+  echoes the agent's own RTP back, so the recording contains the played
+  prompt and goes silent when playback ends (which is exactly what the
+  silence-detection flow needs). Callee-driven "talks N seconds then goes
+  silent" behaviour is covered by the SilenceDetector unit tests instead.
 - `[media_ip]`/`[media_port]` in SDP are empty unless `-mi`/`-mp` are passed;
   PJSIP then tears the call down immediately after the 200.
 - The un-REGISTER the agent sends on shutdown reuses the original REGISTER's
@@ -395,18 +400,17 @@ goal: a variant that first sends a static 401 challenge and asserts an
 Call scenarios — the INVITE branch of each; every `200 OK` carries SDP with
 `[media_ip]`/`[media_port]` and PCMU/8000:
 
-| file                 | behaviour                                                        |
-|----------------------|------------------------------------------------------------------|
-| uas_answer_audio.xml | 180 -> 200 -> stream ~9 s audio (prompt9s.ul) -> 30 s pause (silence) -> recv BYE -> 200 |
-| uas_busy.xml         | 486 Busy Here -> recv ACK                                        |
-| uas_no_answer.xml    | 180 Ringing, never answers -> recv CANCEL -> 200 + 487 to INVITE |
-| uas_talk_forever.xml | 180 -> 200 -> stream audio in a loop -> recv BYE -> 200          |
+| file              | behaviour                                                        |
+|-------------------|------------------------------------------------------------------|
+| uas_answer.xml    | 180 -> 200+SDP -> recv ACK -> await BYE (600 s) -> 200; media echoed via `-rtp_echo`. Serves the happy-path, cancel, and CLI tests |
+| uas_busy.xml      | 486 Busy Here -> recv ACK                                        |
+| uas_no_answer.xml | 180 Ringing, never answers -> recv CANCEL -> 200 + 487 to INVITE |
 
 Launch command (used by `run_uas.sh` and the pytest fixture):
 
 ```
 sipp -sf testenv/sipp/<scenario>.xml -i 127.0.0.1 -p <port> \
-     -mi 127.0.0.1 -mp <rtp_port> -bg -nostdin -trace_err
+     -mi 127.0.0.1 -mp <rtp_port> -rtp_echo -bg -nostdin -trace_err
 ```
 
 Do NOT use `-m`: with the REGISTER branch every registration is its own
@@ -418,26 +422,18 @@ asserts on.
 calls until killed) for manual CLI-mode testing; prints the
 `--sip-host/--sip-port` values to use.
 
-`scripts/gen_fixtures.sh`:
-- WAV fixtures for the agent's player, as before:
-  `ffmpeg -f lavfi -i "sine=frequency=440:duration=3" -ar 8000 -ac 1 -sample_fmt s16 testenv/audio/hello.wav`
-  (plus a 1 s and a 30 s variant).
-- Raw G.711 µ-law prompt streamed by SIPp:
-  `ffmpeg -f lavfi -i "sine=frequency=440:duration=9" -ar 8000 -ac 1 -f mulaw testenv/audio/prompt9s.ul`
+`scripts/gen_fixtures.sh` — WAV fixtures for the agent's player:
+`ffmpeg -f lavfi -i "sine=frequency=440:duration=3" -ar 8000 -ac 1 -sample_fmt s16 testenv/audio/hello.wav`
+(plus a 1 s and a 30 s variant).
 
-Fallback if `rtp_stream` turns out to be missing from the local SIPp build:
-generate an RTP pcap with `scripts/wav2rtpcap.py` (pure Python stdlib:
-WAV -> µ-law -> RTP framing -> pcap file) and use
-`<exec play_pcap_audio="..."/>` in the scenarios instead. Implement the
-fallback script only if actually needed.
-
-Acceptance criteria:
-- `./scripts/run_uas.sh answer_audio 5080` starts and stays up.
+Acceptance criteria (all verified live during development):
+- `./scripts/run_uas.sh answer 5080` starts and stays up.
 - A manual CLI-mode call against it completes the full happy path:
-  REGISTERED -> ANSWERED -> PLAYED -> SILENCE_DETECTED -> hangup.
-- The agent's recording contains the 440 Hz prompt, not silence: duration is
-  >= 9 s and `ffmpeg -i <rec>.wav -af volumedetect -f null -` reports a mean
-  volume clearly above the noise floor.
+  REGISTERED -> ANSWERED -> PLAYED -> SILENCE_DETECTED -> hangup,
+  result ANSWERED, exit code 0.
+- The agent's recording contains the echoed 440 Hz prompt, not silence:
+  `ffmpeg -i <rec>.wav -af volumedetect -f null -` reports a mean volume
+  clearly above the noise floor (measured: ~-28 dB vs -91 dB for silence).
 
 ### M7 — Unit tests (GoogleTest)
 
@@ -486,16 +482,16 @@ Setup (`tests/integration/`):
 
 Test cases (each asserts the full ordered event sequence and the result):
 
-| test                        | scenario         | expected                                             |
-|-----------------------------|------------------|------------------------------------------------------|
-| test_answered_full_flow     | uas_answer_audio | states ...ANSWERED..PLAYED, SILENCE_DETECTED, RECORDING_READY, result ANSWERED, billing_seconds >= 10, recording file exists & is 8k mono s16le |
-| test_busy                   | uas_busy         | result BUSY, sip_code 486, no RECORDING_READY        |
-| test_no_answer              | uas_no_answer    | agent started with `--answer-timeout 8`; client-side deadline 25 s as a safety net -> agent cancels, result NO_ANSWER, sip_code 487 |
-| test_cancel                 | uas_talk_forever | cancel the RPC 3 s after ANSWERED -> agent hangs up; a follow-up Health shows READY within 5 s |
-| test_concurrent_rejected    | uas_answer_audio | second ExecuteCall while first runs -> ALREADY_EXISTS (rejected by the agent before any SIP traffic; one SIPp instance suffices) |
-| test_stream_audio_stub      | (none)           | StreamAudio -> UNIMPLEMENTED                          |
-| test_cli_mode (subprocess)  | uas_answer_audio | run binary in cli mode, parse JSON lines from stdout, exit code 0 |
-| test_idle_shutdown          | (none)           | agent with --idle-shutdown 10 exits by itself in <20 s |
+| test                        | scenario      | expected                                             |
+|-----------------------------|---------------|------------------------------------------------------|
+| test_answered_full_flow     | uas_answer    | states ...ANSWERED..PLAYED, SILENCE_DETECTED, RECORDING_READY, result ANSWERED, billing_seconds >= 10, recording file exists, is 8k mono s16le and is not silent (echoed prompt) |
+| test_busy                   | uas_busy      | result BUSY, sip_code 486, no RECORDING_READY        |
+| test_no_answer              | uas_no_answer | agent started with `--answer-timeout 8`; client-side deadline 25 s as a safety net -> agent cancels, result NO_ANSWER, sip_code 487 |
+| test_cancel                 | uas_answer    | cancel the RPC 3 s after ANSWERED -> agent hangs up; a follow-up Health shows READY within 5 s |
+| test_concurrent_rejected    | uas_answer    | second ExecuteCall while first runs -> ALREADY_EXISTS (rejected by the agent before any SIP traffic; one SIPp instance suffices) |
+| test_stream_audio_stub      | (none)        | StreamAudio -> UNIMPLEMENTED                          |
+| test_cli_mode (subprocess)  | uas_answer    | run binary in cli mode, parse JSON lines from stdout, exit code 0 |
+| test_idle_shutdown          | (none)        | agent with --idle-shutdown 10 exits by itself in <20 s |
 
 WAV validation helper: read the RIFF header in Python (`wave` module), assert
 `framerate == 8000, nchannels == 1, sampwidth == 2, nframes > 0`.
@@ -552,10 +548,10 @@ Definition of done checklist (verify each item, do not self-certify):
    REGISTER must be handled by the method branch inside each scenario (M6
    template). SDP `[media_ip]`/`[media_port]` are empty without `-mi`/`-mp`
    on the command line, and PJSIP then drops the call right after the 200.
-   `rtp_stream` wants raw G.711 payload bytes, not a WAV file; if the local
-   SIPp build lacks rtpstream, fall back to `play_pcap_audio` +
-   `scripts/wav2rtpcap.py` (M6). The shutdown un-REGISTER shows up as a
-   benign "Dead call (successful)" log entry.
+   `rtp_stream` silently sends nothing in the Homebrew build and
+   `play_pcap_audio` needs root (raw sockets) — use `-rtp_echo` for media
+   (M6). The shutdown un-REGISTER shows up as a benign
+   "Dead call (successful)" log entry.
 7. **grpcurl with a non-reflected server**: pass
    `-import-path protos -proto call_agent.proto`, or add gRPC reflection to
    the server (optional nice-to-have, not required).

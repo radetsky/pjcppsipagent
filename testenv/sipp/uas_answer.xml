@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="ISO-8859-1" ?>
 <!DOCTYPE scenario SYSTEM "sipp.dtd">
-<!-- UAS handling REGISTER (branch) and INVITE: answers, stays silent, waits BYE. -->
-<scenario name="uas-answer-silent">
+<!-- UAS handling REGISTER (branch) and INVITE: answers with SDP and waits
+     for the caller's BYE (up to 600 s). Media: launch SIPp with -rtp_echo
+     so the agent's own RTP is echoed back to it — the recording then
+     contains the played prompt, and silence follows playback EOF.
+     Covers the happy-path, cancel, and CLI integration tests. -->
+<scenario name="uas-answer">
   <recv request=".*" regexp_match="true">
     <action>
       <ereg regexp="REGISTER" search_in="hdr" header="CSeq:" check_it="false" assign_to="isreg" />
@@ -52,7 +56,7 @@
 
   <recv request="ACK" />
 
-  <recv request="BYE" timeout="60000" />
+  <recv request="BYE" timeout="600000" />
 
   <send next="done">
     <![CDATA[
