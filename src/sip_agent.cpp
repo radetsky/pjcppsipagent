@@ -21,6 +21,12 @@ SipAgent::SipAgent(const Config& config)
 }
 
 SipAgent::~SipAgent() {
+    // The destroying thread (gRPC handler or executor) may not be registered
+    // with PJSIP; register it first so all cleanup calls (MyCall::~MyCall,
+    // account_->shutdown(), libDestroy()) don't assert.
+    if (ep_) {
+        try { ep_->libRegisterThread("pjcppagent-destroy"); } catch (...) {}
+    }
     player_.reset();
     recorder_.reset();
     call_.reset();

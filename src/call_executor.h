@@ -4,6 +4,7 @@
 #include "args.h"
 #include "events.h"
 #include "sip_agent.h"
+#include <atomic>
 #include <functional>
 #include <string>
 
@@ -32,7 +33,8 @@ private:
     Config config_;
     EventSink sink_;
     SipAgent agent_;
-    bool cancelled_ = false;
+    // cancel() is called from the gRPC handler thread while run() reads this
+    std::atomic<bool> cancelled_{false};
     AgentEvent result_;
 
     // Timing

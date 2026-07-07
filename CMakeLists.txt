@@ -123,7 +123,7 @@ target_include_directories(agent_core PUBLIC
 target_link_libraries(agent_core PRIVATE nlohmann_json::nlohmann_json)
 
 # pjcppagent binary (sip_agent and call_executor use PJSIP, excluded from agent_core)
-add_executable(pjcppagent src/main.cpp src/sip_agent.cpp src/call_executor.cpp)
+add_executable(pjcppagent src/main.cpp src/sip_agent.cpp src/call_executor.cpp src/grpc_server.cpp)
 target_include_directories(pjcppagent BEFORE PRIVATE
   ${PROTO_GEN_DIR}
 )
@@ -143,6 +143,7 @@ target_link_libraries(pjcppagent PRIVATE
   proto_gen
   ${Protobuf_LIBRARY}
   gRPC::grpc++
+  gRPC::grpc++_reflection
   gRPC::grpc++_unsecure
   ${PJPROJECT_LIBRARIES}
   # -static --libs private deps
