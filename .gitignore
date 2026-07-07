@@ -1,4 +1,4 @@
-build/
+build*/
 .cache/
 testenv/audio/
 tests/integration/.python-venv/

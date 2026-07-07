@@ -206,3 +206,8 @@ python3 -m pytest tests/integration -v --tb=short
   The agent has not been tested against Asterisk / FreeSWITCH / carrier SBCs.
 - **StreamAudio**: not implemented — returns `UNIMPLEMENTED`.
 - **No SRTP/TLS**: the agent uses UDP with no encryption.
+- **macOS-only leak checking**: AppleClang ASan lacks `detect_leaks`; Valgrind
+  is incompatible with macOS ≥ Ventura. On-disk ASan builds verify
+  buffer-overflow / use-after-free safety (44/44 unit tests pass under ASan)
+  but not memory leak freedom. Linux + Valgrind would be needed for a
+  full leak check.
