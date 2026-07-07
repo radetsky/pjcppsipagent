@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="ISO-8859-1" ?>
 <!DOCTYPE scenario SYSTEM "sipp.dtd">
-<!-- UAS handling REGISTER (branch) and INVITE: answers with SDP and waits
+<!-- UAS handling REGISTER then INVITE: answers with SDP and waits
      for the caller's BYE (up to 600 s). Media: launch SIPp with -rtp_echo
      so the agent's own RTP is echoed back to it — the recording then
-     contains the played prompt, and silence follows playback EOF.
-     Covers the happy-path, cancel, and CLI integration tests. -->
+     contains the played prompt, and silence follows playback EOF. -->
 <scenario name="uas-answer">
   <recv request=".*" regexp_match="true">
     <action>
@@ -14,10 +13,11 @@
 
   <nop test="isreg" next="do_register" />
 
-  <!-- ============ INVITE branch: answer with SDP, no RTP, await BYE ============ -->
+  <!-- INVITE path: answer with SDP, await BYE -->
+  <label id="invite_handler" />
+
   <send>
     <![CDATA[
-
       SIP/2.0 180 Ringing
       [last_Via:]
       [last_From:]
@@ -26,13 +26,11 @@
       [last_CSeq:]
       Contact: <sip:[local_ip]:[local_port];transport=[transport]>
       Content-Length: 0
-
     ]]>
   </send>
 
   <send>
     <![CDATA[
-
       SIP/2.0 200 OK
       [last_Via:]
       [last_From:]
@@ -50,17 +48,13 @@
       t=0 0
       m=audio [media_port] RTP/AVP 0
       a=rtpmap:0 PCMU/8000
-
     ]]>
   </send>
 
-  <recv request="ACK" />
-
-  <recv request="BYE" timeout="600000" />
-
+  <recv request="ACK" timeout="30000" />
+  <recv request="BYE" timeout="30000" />
   <send next="done">
     <![CDATA[
-
       SIP/2.0 200 OK
       [last_Via:]
       [last_From:]
@@ -68,16 +62,14 @@
       [last_Call-ID:]
       [last_CSeq:]
       Content-Length: 0
-
     ]]>
   </send>
 
-  <!-- ============ REGISTER branch: plain 200 OK ============ -->
+  <!-- REGISTER branch: 200 OK, then wait for INVITE -->
   <label id="do_register" />
 
   <send>
     <![CDATA[
-
       SIP/2.0 200 OK
       [last_Via:]
       [last_From:]
@@ -87,9 +79,10 @@
       [last_Contact:]
       Expires: 300
       Content-Length: 0
-
     ]]>
   </send>
+
+  <recv request="INVITE" next="invite_handler" />
 
   <label id="done" />
   <nop />

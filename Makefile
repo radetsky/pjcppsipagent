@@ -1,7 +1,7 @@
 BUILD_DIR  := build
 CMAKE_OPTS := -S . -B $(BUILD_DIR) -DBUILD_TESTS=ON
 
-.PHONY: all clean test
+.PHONY: all clean test integ
 
 all: $(BUILD_DIR)/Makefile
 	cmake --build $(BUILD_DIR) -j
@@ -16,3 +16,6 @@ clean:
 test: all
 	cmake --build $(BUILD_DIR) --target unit_tests -j
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
+
+integ: all
+	./scripts/run_integration.sh

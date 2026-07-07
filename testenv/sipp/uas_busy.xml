@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="ISO-8859-1" ?>
 <!DOCTYPE scenario SYSTEM "sipp.dtd">
-<!-- UAS handling REGISTER (branch) and INVITE: replies 486 Busy Here. -->
+<!-- UAS handling REGISTER then INVITE: replies 486 Busy Here. -->
 <scenario name="uas-busy">
   <recv request=".*" regexp_match="true">
     <action>
@@ -10,10 +10,11 @@
 
   <nop test="isreg" next="do_register" />
 
-  <!-- ============ INVITE branch: busy ============ -->
+  <!-- INVITE path: busy -->
+  <label id="invite_handler" />
+
   <send>
     <![CDATA[
-
       SIP/2.0 486 Busy Here
       [last_Via:]
       [last_From:]
@@ -21,18 +22,16 @@
       [last_Call-ID:]
       [last_CSeq:]
       Content-Length: 0
-
     ]]>
   </send>
 
-  <recv request="ACK" next="done" />
+  <recv request="ACK" timeout="5000" next="done" />
 
-  <!-- ============ REGISTER branch: plain 200 OK ============ -->
+  <!-- REGISTER branch: 200 OK, then wait for INVITE -->
   <label id="do_register" />
 
   <send>
     <![CDATA[
-
       SIP/2.0 200 OK
       [last_Via:]
       [last_From:]
@@ -42,9 +41,10 @@
       [last_Contact:]
       Expires: 300
       Content-Length: 0
-
     ]]>
   </send>
+
+  <recv request="INVITE" next="invite_handler" />
 
   <label id="done" />
   <nop />
