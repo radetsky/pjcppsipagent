@@ -181,18 +181,24 @@ if(BUILD_TESTS)
     tests/unit/test_args.cpp
     tests/unit/test_silence.cpp
     tests/unit/test_events.cpp
+    tests/unit/test_tts_stub.cpp
+    tests/unit/test_proto_events.cpp
   )
   target_include_directories(unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CLI11_INCLUDE_DIRS}
     ${nlohmann_json_INCLUDE_DIRS}
+    ${PROTO_GEN_DIR}
     ${gtest_SOURCE_DIR}/include
     ${gmock_SOURCE_DIR}/include
   )
   target_link_libraries(unit_tests
     agent_core
+    proto_gen
     GTest::gtest_main
     GTest::gmock_main
+    ${Protobuf_LIBRARY}
+    gRPC::grpc++
   )
 
   include(GoogleTest)
