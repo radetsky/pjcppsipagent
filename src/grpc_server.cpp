@@ -3,7 +3,9 @@
 #include "events.h"
 
 #include <grpcpp/grpcpp.h>
+#ifndef PJCPP_NO_REFLECTION
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
+#endif
 #include <google/protobuf/timestamp.pb.h>
 #include "call_agent.grpc.pb.h"
 
@@ -265,7 +267,9 @@ private:
 int runGrpcServer(const Config& config) {
     CallAgentServiceImpl service(config);
 
+#ifndef PJCPP_NO_REFLECTION
     grpc::reflection::InitProtoReflectionServerBuilderPlugin();
+#endif
     grpc::ServerBuilder builder;
     // TODO(security): mTLS or per-worker token (docs/SIP-AGENT.md)
     builder.AddListeningPort(config.grpc_listen, grpc::InsecureServerCredentials());

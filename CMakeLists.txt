@@ -102,11 +102,18 @@ add_library(proto_gen STATIC
 )
 target_include_directories(proto_gen PUBLIC ${PROTO_GEN_DIR})
 target_include_directories(proto_gen PRIVATE ${Protobuf_INCLUDE_DIR})
-target_link_libraries(proto_gen PRIVATE
-  ${Protobuf_LIBRARY}
-  gRPC::grpc++
-  gRPC::grpc++_unsecure
-)
+if(APPLE)
+  target_link_libraries(proto_gen PRIVATE
+    ${Protobuf_LIBRARY}
+    gRPC::grpc++
+    gRPC::grpc++_unsecure
+  )
+else()
+  target_link_libraries(proto_gen PRIVATE
+    ${Protobuf_LIBRARY}
+    gRPC::grpc++_unsecure
+  )
+endif()
 
 # agent_core static library (args, silence, events, tts_stub - no PJSIP deps)
 add_library(agent_core STATIC
@@ -138,41 +145,56 @@ target_link_directories(pjcppagent PRIVATE
   ${PJPROJECT_LIBRARY_DIRS}
   /opt/homebrew/lib
 )
-target_link_libraries(pjcppagent PRIVATE
-  agent_core
-  proto_gen
-  ${Protobuf_LIBRARY}
-  gRPC::grpc++
-  gRPC::grpc++_reflection
-  gRPC::grpc++_unsecure
-  ${PJPROJECT_LIBRARIES}
-  # -static --libs private deps
-  resample-aarch64-apple-darwin24.5.0
-  gsmcodec-aarch64-apple-darwin24.5.0
-  speex-aarch64-apple-darwin24.5.0
-  ilbccodec-aarch64-apple-darwin24.5.0
-  g7221codec-aarch64-apple-darwin24.5.0
-  yuv-aarch64-apple-darwin24.5.0
-  webrtc-aarch64-apple-darwin24.5.0
-  opus
-  SDL2
-  avdevice avformat avcodec swscale avutil
-  opencore-amrnb opencore-amrwb
-  "-framework CoreAudio"
-  "-framework CoreServices"
-  "-framework AudioUnit"
-  "-framework AudioToolbox"
-  "-framework Foundation"
-  "-framework AppKit"
-  "-framework AVFoundation"
-  "-framework CoreGraphics"
-  "-framework QuartzCore"
-  "-framework CoreVideo"
-  "-framework CoreMedia"
-  "-framework Metal"
-  "-framework MetalKit"
-  "-framework VideoToolbox"
-)
+if(APPLE)
+  target_link_libraries(pjcppagent PRIVATE
+    agent_core
+    proto_gen
+    ${Protobuf_LIBRARY}
+    gRPC::grpc++
+    gRPC::grpc++_reflection
+    gRPC::grpc++_unsecure
+    ${PJPROJECT_LIBRARIES}
+    # -static --libs private deps
+    resample-aarch64-apple-darwin24.5.0
+    gsmcodec-aarch64-apple-darwin24.5.0
+    speex-aarch64-apple-darwin24.5.0
+    ilbccodec-aarch64-apple-darwin24.5.0
+    g7221codec-aarch64-apple-darwin24.5.0
+    yuv-aarch64-apple-darwin24.5.0
+    webrtc-aarch64-apple-darwin24.5.0
+    opus
+    SDL2
+    avdevice avformat avcodec swscale avutil
+    opencore-amrnb opencore-amrwb
+    "-framework CoreAudio"
+    "-framework CoreServices"
+    "-framework AudioUnit"
+    "-framework AudioToolbox"
+    "-framework Foundation"
+    "-framework AppKit"
+    "-framework AVFoundation"
+    "-framework CoreGraphics"
+    "-framework QuartzCore"
+    "-framework CoreVideo"
+    "-framework CoreMedia"
+    "-framework Metal"
+    "-framework MetalKit"
+    "-framework VideoToolbox"
+  )
+else()
+  target_link_libraries(pjcppagent PRIVATE
+    agent_core
+    proto_gen
+    ${Protobuf_LIBRARY}
+    gRPC::grpc++_unsecure
+    ${PJPROJECT_STATIC_LIBS}
+    SDL2
+    avdevice avformat avcodec swscale avutil
+  )
+  # grpc++_reflection depends on grpc++ (secure) which conflicts with
+  # grpc++_unsecure on this Debian release.  Omit reflection on Linux.
+  target_compile_definitions(pjcppagent PRIVATE -DPJCPP_NO_REFLECTION=1)
+endif()
 
 # Unit tests
 if(BUILD_TESTS)
@@ -192,14 +214,25 @@ if(BUILD_TESTS)
     ${gtest_SOURCE_DIR}/include
     ${gmock_SOURCE_DIR}/include
   )
-  target_link_libraries(unit_tests
-    agent_core
-    proto_gen
-    GTest::gtest_main
-    GTest::gmock_main
-    ${Protobuf_LIBRARY}
-    gRPC::grpc++
-  )
+  if(APPLE)
+    target_link_libraries(unit_tests
+      agent_core
+      proto_gen
+      GTest::gtest_main
+      GTest::gmock_main
+      ${Protobuf_LIBRARY}
+      gRPC::grpc++
+    )
+  else()
+    target_link_libraries(unit_tests
+      agent_core
+      proto_gen
+      GTest::gtest_main
+      GTest::gmock_main
+      ${Protobuf_LIBRARY}
+      gRPC::grpc++_unsecure
+    )
+  endif()
 
   include(GoogleTest)
   gtest_discover_tests(unit_tests)
